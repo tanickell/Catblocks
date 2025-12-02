@@ -9,21 +9,49 @@
 
 // Include Particle Device OS APIs
 #include "Particle.h"
+#include "HC_SR04.h"
 
-// Let Device OS manage the connection to the Particle Cloud
-SYSTEM_MODE(AUTOMATIC);
+// Pins
+const int TRIGPIN = D5;
+const int ECHOPIN = D6;
 
-// setup() runs once, when the device is first turned on
+double cm;
+double inches;
+
+
+// Objects
+HC_SR04 ultrasonicSensor = HC_SR04(TRIGPIN, ECHOPIN, 1.0, 2500.0);
+
+
+// System Mode
+SYSTEM_MODE(SEMI_AUTOMATIC);
+
+
+// setup() 
 void setup() {
-  // Put initialization like pinMode and begin functions here
+
+  // initialize variables
+  cm = 0.0;
+  inches = 0.0;
+
+  // set up serial monitor
+  Serial.begin(9600);
+  waitFor(Serial.isConnected, 10000);
+  delay(1000);
+  Serial.printf("Ready to go!\n\n");
+
+  // set up ultrasonic sensor
+  Particle.variable("cm", &cm, DOUBLE);
+  Particle.variable("inches", &inches, DOUBLE);
 }
 
-// loop() runs over and over again, as quickly as it can execute.
-void loop() {
-  // The core of your code will likely live here.
 
-  // Example: Publish event to cloud every 10 seconds. Uncomment the next 3 lines to try it!
-  // Log.info("Sending Hello World to the cloud!");
-  // Particle.publish("Hello world!");
-  // delay( 10 * 1000 ); // milliseconds and blocking - see docs for more info!
+// loop() 
+void loop() {
+  cm = ultrasonicSensor.getDistanceCM();
+  delay(100);
+  inches = ultrasonicSensor.getDistanceInch();
+  delay(100);
+  Serial.printf("Distance in cm: %0.2f  |  Distance in in: %0.2f\n", cm, inches);
+  delay(1000);
 }
