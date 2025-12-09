@@ -1,4 +1,4 @@
-# Time-On! a.k.a. SimonAdvanced
+# Catblocks! (Petblocks)
 Time-On! a.k.a. SimonAdvanced is is a smart Simon-style electronic device that combines the classic '90s toy (really, '70s toy) with modern IoT capabilities, including responsive light controls, smart outlet triggers, and more. 
 
 The box features two modes, Simon mode and Time-On! mode; in the first of these, users can play the classic Simon game using the built-in buttons on the top of the box. In the second mode, users can set a programmable clock that displays on the OLED display along with current temperature, humidity, and pressure readings from the surrounding environment. Button combinations also toggle manual and temperature-controlled lights, both those built-in to the box itself and (optionally) ambient lights over wifi using Philips Hue light bulbs. The box can also control devices connected to Wemo smart plugs.
