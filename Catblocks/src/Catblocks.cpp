@@ -9,51 +9,79 @@
 
 // Include Particle Device OS APIs
 #include "Particle.h"
+#include "neopixel.h"
+#include "Adafruit_SSD1306.h"
+#include "Adafruit_GFX.h"
 #include "HC_SR04.h"
 #include "Adafruit_PWMServoDriver.h"
+#include "Colors.h"
 #include "IoTTimer.h"
 
-// Pins
+
+// constants
 const int TRIGPIN = D5;
 const int ECHOPIN = D6;
 
-// Setup
 const int SERIAL_SPEED = 9600;
 const int SERIAL_TIMEOUT = 10000;
 const int SERIAL_DELAY = 1000;
+
+const int PIXELCOUNT = 12; // just the ring for now
+const int BRIGHTNESS = 50;
+const int RAINBOW_SIZE = sizeof(rainbow) / sizeof(rainbow[0]);
+const int INITIAL_COLOR = violet;
+
+const int OLED_RESET = -1;
 
 const int SERVO1 = 0; // SpringRC servo on channel 0
 const int SERVO2 = 2; // Parallax servo on channel 2
 const int SERVOMIN = 150;
 const int SERVOMAX = 600;
 
+const int PIXEL_TIMER_DELAY = 850;
+const int OLED_TIMER_DELAY = 850;
+const int DISTANCE_TIMER_DELAY = 850;
+const int SERVO_TIMER_DELAY = 850;
+
+// variables (global)
+int pixelColor;
+int pixelNum;
+int brightness;
 double cm;
 double inches;
-
 bool servo1On;
 bool servo2On;
 int motorPhase;
 
 uint8_t servonum;
 
-
-// Objects
+// objects
+Adafruit_NeoPixel pixel(PIXELCOUNT, SPI1, WS2812B);
+Adafruit_SSD1306 display(OLED_RESET);
 HC_SR04 ultrasonicSensor = HC_SR04(TRIGPIN, ECHOPIN, 1.0, 2500.0);
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+IoTTimer pixelTimer;
+IoTTimer oledTimer;
 IoTTimer distanceTimer;
 IoTTimer servoTimer;
 
 // functions
 void setServo(int servoNum, bool on, bool fast, bool clockwise);
+void pixelFill(int startPixel, int endPixel, int hexColor);
 
-// System Mode
+
+// system mode
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
 
 // setup() 
 void setup() {
 
-  // initialize variables
+  // 1. initialize global variables
+  pixelColor = 0;
+  pixelNum = 0;
+  brightness = BRIGHTNESS;
   cm = 0.0;     // HC-SR04 (Ultrasonic Sensor)
   inches = 0.0;
   servonum = 0; // initialize servo in channel 0 (first channel)
@@ -61,17 +89,32 @@ void setup() {
   servo2On = false;
   motorPhase = 0;
 
-  // set up serial monitor
+  // 2. set up serial monitor
   Serial.begin(SERIAL_SPEED);
   waitFor(Serial.isConnected, SERIAL_TIMEOUT);
   delay(SERIAL_DELAY);
   Serial.printf("Ready to go!\n\n");
 
-  // set up servos
+  // 5. set up neopixels
+  pixelColor = 0;
+  pixel.begin();
+  pixel.setBrightness(brightness);
+  pixel.show();
+  pixelFill(0, PIXELCOUNT, INITIAL_COLOR);
+
+  // 7. initialize OLED display + splash
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.display();
+  delay(3000);
+  display.clearDisplay();
+
+  // 13. set up servos
   pwm.begin();
   pwm.setPWMFreq(60);  // Analog servos run at ~60 Hz updates
 
-  // set up timers
+  // 17. set up timers
+  pixelTimer.startTimer(0);
+  oledTimer.startTimer(0);
   distanceTimer.startTimer(0);
   servoTimer.startTimer(0);
 }
@@ -84,7 +127,7 @@ void loop() {
   if (distanceTimer.isTimerReady()) {
     inches = ultrasonicSensor.getDistanceInch();
     Serial.printf("Distance in in: %0.2f\n", inches);
-    distanceTimer.startTimer(1000);
+    distanceTimer.startTimer(DISTANCE_TIMER_DELAY);
   }
 
   // 2. servo driver
@@ -127,7 +170,37 @@ void loop() {
       motorPhase = 0;
     }
 
-    servoTimer.startTimer(1000);
+    servoTimer.startTimer(SERVO_TIMER_DELAY);
+  }
+
+  // 3. OLED Stuff
+  if (oledTimer.isTimerReady()) {
+
+    display.clearDisplay();
+    display.setRotation(0);
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.printf("Dist: %0.2f in\n", inches);
+    display.display();
+
+    oledTimer.startTimer(OLED_TIMER_DELAY);
+  }
+
+  // 4. NeoPixels
+  if (pixelTimer.isTimerReady()) {
+
+    pixelFill(pixelNum, pixelNum, rainbow[pixelColor]);
+    pixelNum++;
+    if (pixelNum > PIXELCOUNT - 1) {
+      pixelNum = 0;
+    }
+    pixelColor++;
+    if (pixelColor > RAINBOW_SIZE - 1) {
+      pixelColor = 0;
+    }
+
+    pixelTimer.startTimer(PIXEL_TIMER_DELAY);
   }
 }
 
@@ -181,4 +254,12 @@ void setServo(int servoNum, bool on, bool fast, bool clockwise) {
   else {
     pwm.setPWM(servoNum, 0, 340);
   }
+}
+
+void pixelFill(int startPixel, int endPixel, int hexColor) {
+  pixel.clear();
+  for (int i = startPixel; i <= endPixel; i++) {
+    pixel.setPixelColor(i, hexColor);
+  }
+  pixel.show();
 }
