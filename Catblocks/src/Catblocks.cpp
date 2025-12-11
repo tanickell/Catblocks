@@ -14,6 +14,7 @@
 #include "Adafruit_GFX.h"
 #include "Adafruit_BME280.h"
 #include "HX711.h"
+#include "Grove_Air_quality_Sensor.h"
 #include "HC_SR04.h"
 #include "Adafruit_PWMServoDriver.h"
 #include "Colors.h"
@@ -23,42 +24,49 @@
 // pin constants
 const int TRIGPIN = D5;
 const int ECHOPIN = D6;
-
 const int SCALE_DT  = D8;
 const int SCALE_CLK = D9;
+const int AQSPIN = D11;
+const int HALLPIN  = D14;
 
 // setup constants
-const int SERIAL_SPEED = 9600;
+const int SERIAL_SPEED = 9600; // serial
 const int SERIAL_TIMEOUT = 10000;
 const int SERIAL_DELAY = 1000;
-
-const int PIXELCOUNT = 12; // just the ring for now
+const int PIXELCOUNT = 12; // neopixels -- just the ring for now
 const int BRIGHTNESS = 50;
 const int RAINBOW_SIZE = sizeof(rainbow) / sizeof(rainbow[0]);
 const int INITIAL_COLOR = violet;
-
-const int OLED_RESET = -1;
-
-const int BME280_HEX_ADDRESS = 0x76;
-
+const int OLED_RESET = -1; // OLED
+const int BME280_HEX_ADDRESS = 0x76; // BME
 const int CALFACTOR = 425; // scale
 const int SAMPLES = 10;
-
+const String airQualityMessages[5] = { // AQ Sensor
+  "High pollution! (Force signal active.)\n",
+  "High pollution!\n",
+  "Low pollution.\n",
+  "Fresh air.\n",
+  "Something went wrong.\n"
+};
 const int PUBLISH_DELAY = 0; // MQTT
-
 const int SERVO1 = 0; // SpringRC servo on channel 0
 const int SERVO2 = 2; // Parallax servo on channel 2
 const int SERVOMIN = 150;
 const int SERVOMAX = 600;
+const int MPU_ADDR = 0x68; // accelerometer
+const int MPU_REFRESH_FREQ = 200;
 
 const int DELAY_OFFSET = 800;
-
 const int PIXEL_TIMER_DELAY = 1000 - DELAY_OFFSET; // Timer delays
 const int OLED_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int BME_TIMER_DELAY = 1000 - DELAY_OFFSET;
+const int AQ_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int LOAD_TIMER_DELAY = 1000 - DELAY_OFFSET;
+const int ACCEL_TIMER_DELAY = 1000 - DELAY_OFFSET;
+const int CLOCK_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int DISTANCE_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int SERVO_TIMER_DELAY = 1000 - DELAY_OFFSET;
+const int SERIAL_TIMER_DELAY = 850;
 
 // constants
 
@@ -66,29 +74,35 @@ const int SERVO_TIMER_DELAY = 1000 - DELAY_OFFSET;
 int pixelColor; // neopixels
 int pixelNum;
 int brightness;
-
 bool status;
 float tempC;
 float pressPA;
 float humidRH;
 float tempF;
 float pressInHg;
-
 float weight; // scale
 float rawData;
 float calibration;
 int offset;
 unsigned int last;
-
+int quality; // aq sensor
+int aqValue;
+String aqMessage;
 float pubValue; // MQTT
-
-double cm;
+double cm; // scale
 double inches;
-bool servo1On;
+bool servo1On; // servos
 bool servo2On;
 int motorPhase;
+uint8_t servonum; // servos
+int hallSensorVal; // hall sensor
 
-uint8_t servonum;
+byte accel_x_h, accel_x_l; // MPU-6050
+byte accel_y_h, accel_y_l;
+byte accel_z_h, accel_z_l;
+int16_t accel_x, accel_y, accel_z;
+float accel_x_gs, accel_y_gs, accel_z_gs;
+String dateTime, timeOnly;
 
 // objects
 Adafruit_NeoPixel pixel(PIXELCOUNT, SPI1, WS2812B);
@@ -96,25 +110,33 @@ Adafruit_SSD1306 display1(OLED_RESET);
 Adafruit_SSD1306 display2(OLED_RESET);
 Adafruit_BME280 bme; // Define BME280 object (I2C device)
 HX711 myScale(SCALE_DT, SCALE_CLK);
+AirQualitySensor aqSensor(AQSPIN);
 HC_SR04 ultrasonicSensor = HC_SR04(TRIGPIN, ECHOPIN, 1.0, 2500.0);
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 
+// timers
 IoTTimer pixelTimer;
 IoTTimer oledTimer;
 IoTTimer bmeTimer;
+IoTTimer aqTimer;
 IoTTimer loadTimer;
+IoTTimer accelTimer;
+IoTTimer clockTimer;
 IoTTimer distanceTimer;
 IoTTimer servoTimer;
+IoTTimer serialTimer;
 
 // functions
 void setServo(int servoNum, bool on, bool fast, bool clockwise);
 void pixelFill(int startPixel, int endPixel, int hexColor);
-
 float celsiusToFahrenheit(float celsius);
 float pascalsToInHg(float pascals);
 int fahrenheitToPixel(float Fahrenheit);
 int inHgToBrightness(float PressInHg);
 int humidityToColor(float HumidRH);
+int16_t getAccelFromRegisters(byte *high, byte *low, int addr);
+float convertLSBsToGs(int lsbs);
+
 
 // system mode
 SYSTEM_MODE(SEMI_AUTOMATIC);
@@ -133,6 +155,10 @@ void setup() {
   servo1On = false;
   servo2On = false;
   motorPhase = 0;
+  quality = 0;
+  hallSensorVal = 0;
+
+  pinMode(HALLPIN, INPUT);
 
   // 2. set up serial monitor
   Serial.begin(SERIAL_SPEED);
@@ -161,18 +187,32 @@ void setup() {
   if (!status) {
     Serial.printf("BME280 at addess 0x%02X failed to start.", BME280_HEX_ADDRESS);
   }
-
-  // initialize temp, humidity, and pressure variables
   tempC = bme.readTemperature();
   pressPA = bme.readPressure();
   humidRH = bme.readHumidity();
-
 
   // 11. set up scale
   myScale.set_scale();          // initialize loadcell
   delay(5000);                  // let the loadcell settle
   myScale.tare();               // set the tare weight (or zero)
   myScale.set_scale(CALFACTOR); // adjust when calibrating scale to desired units
+
+  // 11. set up air quality sensor
+  Serial.printf("Waiting for aq sensor to init...\n");
+  delay(20000);
+  if (aqSensor.init()) {
+    Serial.printf("AQ Sensor ready.\n");
+  }
+  else {
+    Serial.printf("AQ Sensor ERROR.\n");
+  }
+
+  // 13. set up MPU-6050
+  Wire.begin();
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); // Select and write to PWR_MGMT_1 register
+  Wire.write(0x00); // wakes up MPU-6050
+  Wire.endTransmission(true); // end transmission and close connection
 
   // 13. set up servos
   pwm.begin();
@@ -182,19 +222,29 @@ void setup() {
   pixelTimer.startTimer(0);
   oledTimer.startTimer(0);
   bmeTimer.startTimer(0);
+  aqTimer.startTimer(0);
   loadTimer.startTimer(0);
+  accelTimer.startTimer(0);
   distanceTimer.startTimer(0);
   servoTimer.startTimer(0);
+  serialTimer.startTimer(0);
 }
 
 
 // loop() 
 void loop() {
 
+  // first, get hall sensor reading for this loop
+  hallSensorVal = digitalRead(HALLPIN);
+
   // 1. ultrasonic sensor
   if (distanceTimer.isTimerReady()) {
-    inches = ultrasonicSensor.getDistanceInch();
-    Serial.printf("Distance in in: %0.2f\n", inches);
+
+    if (hallSensorVal == 0) { // if the lid is closed...
+      inches = ultrasonicSensor.getDistanceInch();
+
+      // TODO: alert logic goes here
+    }
     distanceTimer.startTimer(DISTANCE_TIMER_DELAY);
   }
 
@@ -283,10 +333,7 @@ void loop() {
 
   // 5. Load Cell
   if (loadTimer.isTimerReady()) {
-
     weight = myScale.get_units(SAMPLES); // return weight in units set by set_scale()
-    Serial.printf("Weight (in grams) --> %0.2f\n", weight);
-
     loadTimer.startTimer(LOAD_TIMER_DELAY);
   }
 
@@ -302,30 +349,68 @@ void loop() {
     tempF = celsiusToFahrenheit(tempC);
     pressInHg = pascalsToInHg(pressPA);
 
-    // print temp, pressure, and humidity to serial monitor
-    Serial.printf("tempF: %0.2f\npressInHg: %0.2f\nhumidRH: %0.2f\n\n", 
-      tempF, pressInHg, humidRH);
-
-
     bmeTimer.startTimer(BME_TIMER_DELAY);
+  }
+
+  // 7. AQ Sensor
+  if (aqTimer.isTimerReady()) {
+
+    quality = aqSensor.slope();
+    aqValue = aqSensor.getValue();
+
+    if (quality == AirQualitySensor::FORCE_SIGNAL) {
+      aqMessage = airQualityMessages[0];
+    }
+    else if (quality == AirQualitySensor::HIGH_POLLUTION) {
+      aqMessage = airQualityMessages[1];
+    }
+    else if (quality == AirQualitySensor::LOW_POLLUTION) {
+      aqMessage = airQualityMessages[2];
+    }
+    else if (quality == AirQualitySensor::FRESH_AIR) {
+      aqMessage = airQualityMessages[3];
+    }
+    else {
+      aqMessage = airQualityMessages[4];
+    }
+
+    aqTimer.startTimer(AQ_TIMER_DELAY);
+  }
+
+  // 8. Accelerometer (MPU-6050)
+  if (accelTimer.isTimerReady()) {
+
+    // Request and then read 2 bytes
+    Wire.requestFrom(MPU_ADDR, 2, true);
+    accel_x = getAccelFromRegisters(&accel_x_h, &accel_x_l, 0x3B);
+    accel_y = getAccelFromRegisters(&accel_y_h, &accel_y_l, 0x3D);
+    accel_z = getAccelFromRegisters(&accel_z_h, &accel_z_l, 0x3F);
+
+    accel_x_gs = convertLSBsToGs(accel_x);
+    accel_y_gs = convertLSBsToGs(accel_y);
+    accel_z_gs = convertLSBsToGs(accel_z);
+
+    accelTimer.startTimer(MPU_REFRESH_FREQ);
+  }
+
+  // Serial Print
+  if (serialTimer.isTimerReady()) {
+
+    Serial.printf(
+      "Distance in in: %0.2f\n"
+      "Weight (in grams) --> %0.2f\n"
+      "tempF: %0.2f\npressInHg: %0.2f\nhumidRH: %0.2f\n\n"
+      "aqSensor value: %d\n"
+      "%s\n\n"
+      "x-axis accel: %0.6f \ny-axis accel: %0.6f \nz-axis accel: %0.6f \n\n"
+      ,
+      inches, weight, tempF, pressInHg, humidRH, aqValue, aqMessage.c_str(), accel_x_gs, accel_y_gs, accel_z_gs
+    );
+
+    serialTimer.startTimer(SERIAL_TIMER_DELAY);
   }
 }
 
-// you can use this function if you'd like to set the pulse length in seconds
-// e.g. setServoPulse(0, 0.001) is a ~1 millisecond pulse width. its not precise!
-void setServoPulse(uint8_t n, double pulse) {
-  double pulselength;
-  
-  pulselength = 1000000;   // 1,000,000 us per second
-  pulselength /= 60;   // 60 Hz
-  Serial.print(pulselength); Serial.println(" us per period"); 
-  pulselength /= 4096;  // 12 bits of resolution
-  Serial.print(pulselength); Serial.println(" us per bit"); 
-  pulse *= 1000;
-  pulse /= pulselength;
-  Serial.println(pulse);
-  pwm.setPWM(n, 0, pulse);
-}
 
 void setServo(int servoNum, bool on, bool fast, bool clockwise) {
   if (on) {
@@ -389,4 +474,25 @@ int inHgToBrightness(float PressInHg) {
 
 int humidityToColor(float HumidRH) {
   return rainbow[(int)(HumidRH / (100.0 / 6.0))];
+}
+
+int16_t getAccelFromRegisters(byte *high, byte *low, int addr) {
+
+  // set the pointer to the memory location at addr of the MPU and wait for data
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(addr); // starting with register 0x3B
+  Wire.endTransmission(false); // send the set pointer command and keep active
+
+  // Request and then read 2 bytes
+  Wire.requestFrom(MPU_ADDR, 2, true);
+  byte accel_h = Wire.read();
+  byte accel_l = Wire.read();
+  
+  *high = accel_h;
+  *low = accel_l;
+  return accel_h << 8 | accel_l;
+}
+
+float convertLSBsToGs(int lsbs) {
+  return lsbs / 16384.0;
 }
