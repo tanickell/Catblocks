@@ -2,7 +2,7 @@
  * Project: Catblocks
  * Description: IoT Cohort 17 Capstone -- Smart Pet Feeder and Monitoring System
  * Author: Tim Nickell
- * Date: 
+ * Date: 2025-12-12
  * For comprehensive documentation and examples, please visit:
  * https://docs.particle.io/firmware/best-practices/firmware-template/
  */
@@ -20,7 +20,10 @@
 #include "Colors.h"
 #include "IoTTimer.h"
 #include "Button.h"
-
+#include <Adafruit_MQTT.h>
+#include "Adafruit_MQTT/Adafruit_MQTT_SPARK.h"
+#include "Adafruit_MQTT/Adafruit_MQTT.h"
+#include "credentials.h"
 
 // pin constants
 const int BUTTONR = D3;
@@ -51,14 +54,16 @@ const String airQualityMessages[5] = { // AQ Sensor
   "Fresh air.\n",
   "Something went wrong.\n"
 };
+const int AQ_SENSOR_TIMEOUT = 1000;
 const int PUBLISH_DELAY = 0; // MQTT
+const int SUB_FREQ = 1000;
 const int SERVO1 = 0; // SpringRC servo on channel 0
 const int SERVO2 = 2; // Parallax servo on channel 2
 const int SERVOMIN = 150;
 const int SERVOMAX = 600;
 const int MPU_ADDR = 0x68; // accelerometer
 const int MPU_REFRESH_FREQ = 200;
-
+const int STARTING_ADDRESS = 0x00AE; // EEPROM
 const int DELAY_OFFSET = 800;
 const int PIXEL_TIMER_DELAY = 1000 - DELAY_OFFSET; // Timer delays
 const int OLED_TIMER_DELAY = 1000 - DELAY_OFFSET;
@@ -69,14 +74,15 @@ const int ACCEL_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int CLOCK_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int DISTANCE_TIMER_DELAY = 1000 - DELAY_OFFSET;
 const int SERVO_TIMER_DELAY = 1000 - DELAY_OFFSET;
+const int PUB_TIMER_DELAY = 30000 - DELAY_OFFSET;
 const int SERIAL_TIMER_DELAY = 850;
-
-// constants
 
 // variables (global)
 int pixelColor; // neopixels
 int pixelNum;
 int brightness;
+int color;
+byte buf[6];
 bool status;
 float tempC;
 float pressPA;
@@ -94,18 +100,28 @@ String aqMessage;
 float pubValue; // MQTT
 double cm; // scale
 double inches;
+int addr; // EEPROM
+int addr2;
+byte hour, minute, second;
+byte globalred, globalgreen, globalblue;
 bool servo1On; // servos
 bool servo2On;
 int motorPhase;
 uint8_t servonum; // servos
 int hallSensorVal; // hall sensor
-
 byte accel_x_h, accel_x_l; // MPU-6050
 byte accel_y_h, accel_y_l;
 byte accel_z_h, accel_z_l;
 int16_t accel_x, accel_y, accel_z;
 float accel_x_gs, accel_y_gs, accel_z_gs;
-String dateTime, timeOnly;
+String dateTime, timeOnly; // real-time clock
+bool manualColor;
+int morning[4];
+int evening[4];
+int mornInd;
+int evenInd;
+bool isMorning;
+bool isFeeding;
 
 // objects
 Adafruit_NeoPixel pixel(PIXELCOUNT, SPI1, WS2812B);
@@ -130,6 +146,7 @@ IoTTimer clockTimer;
 IoTTimer distanceTimer;
 IoTTimer servoTimer;
 IoTTimer serialTimer;
+IoTTimer pubTimer;
 
 // functions
 void setServo(int servoNum, bool on, bool fast, bool clockwise);
@@ -141,11 +158,30 @@ int inHgToBrightness(float PressInHg);
 int humidityToColor(float HumidRH);
 int16_t getAccelFromRegisters(byte *high, byte *low, int addr);
 float convertLSBsToGs(int lsbs);
-
+void saveToEEPROM(int addr, byte h, byte m, byte s);
+void hexColorToBytes(int myColor, byte *r, byte *g, byte *b);
+void MQTT_connect();
+bool MQTT_ping();
 
 // system mode
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
+// global state
+TCPClient TheClient;
+
+// set up MQTT client class
+Adafruit_MQTT_SPARK mqtt(&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+
+// feeds
+Adafruit_MQTT_Subscribe colorPickerFeed     = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/color-picker");
+Adafruit_MQTT_Subscribe buttonFeed          = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/button-feed");
+Adafruit_MQTT_Publish   scalePubFeed        = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/weights");
+Adafruit_MQTT_Publish   aqValuePubFeed      = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/air-quality-value-feed");
+Adafruit_MQTT_Publish   aqMessagePubFeed    = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/air-quality-message-feed");
+Adafruit_MQTT_Publish   temperaturePubFeed  = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/bme-temperature-feed");
+Adafruit_MQTT_Publish   pressurePubFeed     = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/bme-pressure-feed");
+Adafruit_MQTT_Publish   humidityPubFeed     = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/bme-humidity-feed");
+Adafruit_MQTT_Publish   distancePubFeed     = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/distance-feed");
 
 // setup() 
 void setup() {
@@ -162,7 +198,25 @@ void setup() {
   motorPhase = 0;
   quality = 0;
   hallSensorVal = 0;
+  addr = STARTING_ADDRESS;
+  addr2 = STARTING_ADDRESS + 3;
+  manualColor = false;
 
+  morning[0] = 0;
+  morning[1] = 6;
+  morning[2] = 0;
+  morning[3] = 0;
+  evening[0] = 1;
+  evening[1] = 8;
+  evening[2] = 0;
+  evening[3] = 0;
+
+  mornInd = 0;
+  evenInd = 0;
+  isMorning = true;
+  isFeeding = false;
+
+  // pinModes
   pinMode(HALLPIN, INPUT);
 
   // 2. set up serial monitor
@@ -196,6 +250,28 @@ void setup() {
   pressPA = bme.readPressure();
   humidRH = bme.readHumidity();
 
+  // 8. Set up WiFi
+  WiFi.on();
+  WiFi.connect();
+  while (WiFi.connecting()) {
+    Serial.printf(".");
+    delay(1000);
+    Serial.printf("\n\n");
+  }
+
+  // Set up particle cloud
+  while (!Particle.connected()) {
+    Particle.connect();
+    delay(100);
+    Serial.printf("x");
+  }
+  Serial.printf("\n\n");
+  delay(3000);
+
+  // set up clock
+  Time.zone(-7); // MST = -7; MDT = -6
+  Particle.syncTime(); // sync time with particle cloud
+
   // 11. set up scale
   myScale.set_scale();          // initialize loadcell
   delay(5000);                  // let the loadcell settle
@@ -204,13 +280,23 @@ void setup() {
 
   // 11. set up air quality sensor
   Serial.printf("Waiting for aq sensor to init...\n");
-  delay(20000);
+  delay(AQ_SENSOR_TIMEOUT);
   if (aqSensor.init()) {
     Serial.printf("AQ Sensor ready.\n");
   }
   else {
     Serial.printf("AQ Sensor ERROR.\n");
   }
+
+  // 12. Set up MQTT
+  mqtt.subscribe(&colorPickerFeed);
+  mqtt.subscribe(&buttonFeed);
+
+  // 12. Retrieve time info from EEPROM
+  addr = STARTING_ADDRESS;
+  hour   = EEPROM.read(addr);
+  minute = EEPROM.read(addr + 1);
+  second  = EEPROM.read(addr + 2);
 
   // 13. set up MPU-6050
   Wire.begin();
@@ -233,11 +319,76 @@ void setup() {
   distanceTimer.startTimer(0);
   servoTimer.startTimer(0);
   serialTimer.startTimer(0);
+  pubTimer.startTimer(0);
 }
 
 
 // loop() 
 void loop() {
+
+  // First first: perform Adafruit subscription stuff
+  MQTT_connect();
+  MQTT_ping();
+  Adafruit_MQTT_Subscribe *subscription;
+  while ((subscription = mqtt.readSubscription(SUB_FREQ))) {
+    if (subscription == &colorPickerFeed) {
+      Serial.printf("Received from Adafruit: %s \n", (char *) colorPickerFeed.lastread);
+
+      memcpy(buf, &colorPickerFeed.lastread[1], 6); // strip off the '#' and copy into buf
+      Serial.printf("Buffer: %s \n", (char *)buf);
+      color = strtol((char *)buf, NULL, 16); // converts string to int (hex, base 16)
+      Serial.printf("Buffer: 0x%02X \n", color);
+
+      pixelFill(0, PIXELCOUNT - 1, color);
+
+      byte bytered, bytegreen, byteblue;
+      hexColorToBytes(color, &bytered, &bytegreen, &byteblue);      
+      // store values in eeprom
+      saveToEEPROM(addr, bytered, bytegreen, byteblue);
+
+      manualColor = true;
+    }
+    if (subscription == &buttonFeed) {
+      Serial.printf("Received from Adafruit: %s \n", (char *) buttonFeed.lastread);
+
+      // Numpad Code
+      if (((char *) buttonFeed.lastread)[0] == '*') { // morning
+        isMorning = true;
+        mornInd = 0;
+      }
+      else if (((char *) buttonFeed.lastread)[0] == '#') { // morning
+        isMorning = false;
+        evenInd = 0;
+      }
+      else {
+        if (isMorning) {
+          morning[mornInd++] = ((char *) buttonFeed.lastread)[0];
+          if (mornInd > 3) {
+            mornInd = 0;
+          }
+        }
+        else {
+          evening[evenInd++] = ((char *) buttonFeed.lastread)[0];
+          if (evenInd > 3) {
+            evenInd = 0;
+          }
+        }
+      }
+
+      // Momentary Button Code
+      int subValue = atoi((char *)buttonFeed.lastread);
+      if (subValue == 1) {
+        setServo(SERVO2, true, true, true);
+      }
+      else {
+        setServo(SERVO2, false, true, true);
+      }
+    }
+  }
+
+  for (int i = 0; i < 4; i++) {
+    Serial.printf("%d\n", morning[i]);
+  }
 
   // first, get hall sensor reading for this loop
   hallSensorVal = digitalRead(HALLPIN);
@@ -270,43 +421,6 @@ void loop() {
   // 2. servo driver
   if (servoTimer.isTimerReady()) {
 
-    // if (motorPhase == 0) {
-    //   setServo(SERVO1, true, false, true);
-    //   setServo(SERVO2, true, false, true);
-    // }
-    // if (motorPhase == 1) {
-    //   setServo(SERVO1, true, true, true);
-    //   setServo(SERVO2, true, true, true);
-    // }
-    // if (motorPhase == 2) {
-    //   setServo(SERVO1, true, false, true);
-    //   setServo(SERVO2, true, false, true);
-    // }
-    // if (motorPhase == 3) {
-    //   setServo(SERVO1, false, true, true);
-    //   setServo(SERVO2, false, true, true);
-    // }
-    // if (motorPhase == 4) {
-    //   setServo(SERVO1, true, false, false);
-    //   setServo(SERVO2, true, false, false);
-    // }    
-    // if (motorPhase == 5) {
-    //   setServo(SERVO1, true, true, false);
-    //   setServo(SERVO2, true, true, false);
-    // }
-    // if (motorPhase == 6) {
-    //   setServo(SERVO1, true, false, false);
-    //   setServo(SERVO2, true, false, false);
-    // }
-    // if (motorPhase == 7) {
-    //   setServo(SERVO1, false, true, true);
-    //   setServo(SERVO2, false, true, true);
-    // }
-    // motorPhase++;
-    // if (motorPhase > 7) {
-    //   motorPhase = 0;
-    // }
-
     servoTimer.startTimer(SERVO_TIMER_DELAY);
   }
 
@@ -337,14 +451,18 @@ void loop() {
   // 4. NeoPixels
   if (pixelTimer.isTimerReady()) {
 
-    pixelFill(pixelNum, pixelNum, rainbow[pixelColor]);
-    pixelNum++;
-    if (pixelNum > PIXELCOUNT - 1) {
-      pixelNum = 0;
-    }
-    pixelColor++;
-    if (pixelColor > RAINBOW_SIZE - 1) {
-      pixelColor = 0;
+    if (!manualColor) {
+
+      pixelFill(pixelNum, pixelNum, rainbow[pixelColor]);
+      pixelNum++;
+      if (pixelNum > PIXELCOUNT - 1) {
+        pixelNum = 0;
+      }
+      pixelColor++;
+      if (pixelColor > RAINBOW_SIZE - 1) {
+        pixelColor = 0;
+      }
+
     }
 
     pixelTimer.startTimer(PIXEL_TIMER_DELAY);
@@ -415,6 +533,9 @@ void loop() {
   // Serial Print
   if (serialTimer.isTimerReady()) {
 
+    dateTime = Time.timeStr();
+    timeOnly = dateTime.substring(11, 19);
+
     Serial.printf(
       "Distance in in: %0.2f\n"
       "Weight (in grams) --> %0.2f\n"
@@ -426,8 +547,67 @@ void loop() {
       inches, weight, tempF, pressInHg, humidRH, aqValue, aqMessage.c_str(), accel_x_gs, accel_y_gs, accel_z_gs
     );
 
+    Serial.printf("Date and time is %s\n", dateTime.c_str());
+    Serial.printf("Time is %s\n\n", timeOnly.c_str());
+
     serialTimer.startTimer(SERIAL_TIMER_DELAY);
   }
+
+  // Publish to MQTT/Adafruit
+  if (pubTimer.isTimerReady()) {
+
+    temperaturePubFeed.publish(tempF);
+    pressurePubFeed.publish(pressInHg);
+    humidityPubFeed.publish(humidRH);
+    scalePubFeed.publish(weight);
+    aqValuePubFeed.publish(aqValue);
+    aqMessagePubFeed.publish(String::format("%s\n", aqMessage.c_str()).c_str());
+    distancePubFeed.publish(8.0 - inches);
+
+    pubTimer.startTimer(PUB_TIMER_DELAY);
+  }
+}
+
+
+// functions
+
+// Function to connect and reconnect as necessary to the MQTT server.
+// Should be called in the loop function and it will take care if connecting.
+void MQTT_connect() {
+  int8_t ret;
+ 
+  // Return if already connected.
+  if (mqtt.connected()) {
+    return;
+  }
+ 
+  Serial.print("Connecting to MQTT... ");
+ 
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+       Serial.printf("Error Code %s\n",mqtt.connectErrorString(ret));
+       Serial.printf("Retrying MQTT connection in 5 seconds...\n");
+       mqtt.disconnect();
+       delay(5000);  // wait 5 seconds and try again
+  }
+  Serial.printf("MQTT Connected!\n");
+}
+
+
+// ping MQTT
+bool MQTT_ping() {
+  static unsigned int last;
+  bool pingStatus;
+
+  if ((millis()-last)>120000) {
+      Serial.printf("Pinging MQTT \n");
+      pingStatus = mqtt.ping();
+      if(!pingStatus) {
+        Serial.printf("Disconnecting \n");
+        mqtt.disconnect();
+      }
+      last = millis();
+  }
+  return pingStatus;
 }
 
 
@@ -514,4 +694,16 @@ int16_t getAccelFromRegisters(byte *high, byte *low, int addr) {
 
 float convertLSBsToGs(int lsbs) {
   return lsbs / 16384.0;
+}
+
+void saveToEEPROM(int addr, byte h, byte m, byte s) {
+  EEPROM.write(addr, h);
+  EEPROM.write(addr + 1, m);
+  EEPROM.write(addr + 2, s);
+}
+
+void hexColorToBytes(int myColor, byte *r, byte *g, byte *b) {
+    *r = color >> 16 & 0x0000FF;
+    *g = color >> 8  & 0x0000FF;
+    *b = color       & 0x0000FF;
 }
