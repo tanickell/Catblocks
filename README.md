@@ -1,7 +1,7 @@
 # Catblocks! (Petblocks)
-Time-On! a.k.a. SimonAdvanced is is a smart Simon-style electronic device that combines the classic '90s toy (really, '70s toy) with modern IoT capabilities, including responsive light controls, smart outlet triggers, and more. 
+Catblocks! is a multi-purpose smart cat feeding device intended to automate much of the hassle of feeding your cat. Its hallmark feature is its stacked-box look, combined with an auger-powered dispenser that pushes kibble into your cat's bowl.
 
-The box features two modes, Simon mode and Time-On! mode; in the first of these, users can play the classic Simon game using the built-in buttons on the top of the box. In the second mode, users can set a programmable clock that displays on the OLED display along with current temperature, humidity, and pressure readings from the surrounding environment. Button combinations also toggle manual and temperature-controlled lights, both those built-in to the box itself and (optionally) ambient lights over wifi using Philips Hue light bulbs. The box can also control devices connected to Wemo smart plugs.
+The box freatures an ultrasonic sensor that tracks the height of the food left in the bin so that you always know when you need to buy refills. It also has a BME280 atmospheric sensor for temperature and humidity readinds, an air quality sensor for room air readindgs, two LED screens for viewing said information, a neopixel ring for aesthetics controllable via the internet, buttons for manual control of the auger and agitator screws, a hall sensor to make sure the bin is closed, a scale to weigh food dispensed, and connection to an Adafruit Dashboard where users can control aspects like food schedules (yet to be implemented -- stay tuned!).
 
 Users can get started using the following list of supplies.
 
@@ -12,17 +12,24 @@ Users can get started using the following list of supplies.
 * Computer (Windows, MacOS, or Linux)
 * Particle Photon 2 Microcontroller
 * Breadboards (1x small, 1x very small)
-* Latching Button
-* Sparkfun RGB Encoder
-* Piezo Buzzer (Passive Buzzer)
-* ADafruit NeoPixels, 4-pack
-* Adafruit 128x64 pixel OLED display
-* Sparkfun BME280 Breakout
-* Giant Buttons (1 each of Red, Blue, Yellow, Green)
-* Box of 14" by 3.5" by 4.67" dimensions (12 x 3 x 4 scaled by 7/6)
-* Micro USB to USBC/USBA cable
-* (Optional) 3D printer for brand plaques
-* (Optional) Laser cutter for plywood or acrylic puzzle-piece style snap-together box case
+* Acrylic Sheets, ¼” (x5, various colors) (body)
+* 2 ½” PVC T-Joint
+* Wood Blocks, 1”x1”x2” (mounts for servos)
+* PLA Filament & 3D Printer (Agitator, Auger)
+* HC-SR04 Ultrasonic Sensor (Distance)
+* BME280 Environment Sensor (Temp)
+* MPU-6050 Accelerometer/Gyroscopic Sensor
+* Grove - Air Quality Sensor v1.3
+* Hall Sensor & Magnet (Lid Sensor)
+* 1kg Load Cell (Scale)
+* 2x Continuous Servo Motors
+* 1x Adafruit 16-Channel Servo Driver Board
+* 2x Mountable Buttons (manual dispenser)
+* Particle Photon 2 Microcontroller
+* Adafruit NeoPixel Ring (12-pixel)
+* OLED Screen, 128x64 pixels (x2)
+* 5V Power Supply
+
 
 <br>
 
