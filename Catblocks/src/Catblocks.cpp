@@ -19,9 +19,12 @@
 #include "Adafruit_PWMServoDriver.h"
 #include "Colors.h"
 #include "IoTTimer.h"
+#include "Button.h"
 
 
 // pin constants
+const int BUTTONR = D3;
+const int BUTTONL = D4;
 const int TRIGPIN = D5;
 const int ECHOPIN = D6;
 const int SCALE_DT  = D8;
@@ -39,7 +42,7 @@ const int RAINBOW_SIZE = sizeof(rainbow) / sizeof(rainbow[0]);
 const int INITIAL_COLOR = violet;
 const int OLED_RESET = -1; // OLED
 const int BME280_HEX_ADDRESS = 0x76; // BME
-const int CALFACTOR = 425; // scale
+const int CALFACTOR = 1000; // scale
 const int SAMPLES = 10;
 const String airQualityMessages[5] = { // AQ Sensor
   "High pollution! (Force signal active.)\n",
@@ -113,6 +116,8 @@ HX711 myScale(SCALE_DT, SCALE_CLK);
 AirQualitySensor aqSensor(AQSPIN);
 HC_SR04 ultrasonicSensor = HC_SR04(TRIGPIN, ECHOPIN, 1.0, 2500.0);
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+Button buttonR(BUTTONR);
+Button buttonL(BUTTONL);
 
 // timers
 IoTTimer pixelTimer;
@@ -237,6 +242,20 @@ void loop() {
   // first, get hall sensor reading for this loop
   hallSensorVal = digitalRead(HALLPIN);
 
+  // Servo Buttons
+    if (buttonL.isPressed()) {
+      setServo(SERVO1, true, true, true);
+    }
+    else {
+      setServo(SERVO1, false, true, true);
+    }
+    if (buttonR.isPressed()) {
+      setServo(SERVO2, true, true, true);
+    }
+    else {
+      setServo(SERVO2, false, true, true);
+    }
+
   // 1. ultrasonic sensor
   if (distanceTimer.isTimerReady()) {
 
@@ -251,42 +270,42 @@ void loop() {
   // 2. servo driver
   if (servoTimer.isTimerReady()) {
 
-    if (motorPhase == 0) {
-      setServo(SERVO1, true, false, true);
-      setServo(SERVO2, true, false, true);
-    }
-    if (motorPhase == 1) {
-      setServo(SERVO1, true, true, true);
-      setServo(SERVO2, true, true, true);
-    }
-    if (motorPhase == 2) {
-      setServo(SERVO1, true, false, true);
-      setServo(SERVO2, true, false, true);
-    }
-    if (motorPhase == 3) {
-      setServo(SERVO1, false, true, true);
-      setServo(SERVO2, false, true, true);
-    }
-    if (motorPhase == 4) {
-      setServo(SERVO1, true, false, false);
-      setServo(SERVO2, true, false, false);
-    }    
-    if (motorPhase == 5) {
-      setServo(SERVO1, true, true, false);
-      setServo(SERVO2, true, true, false);
-    }
-    if (motorPhase == 6) {
-      setServo(SERVO1, true, false, false);
-      setServo(SERVO2, true, false, false);
-    }
-    if (motorPhase == 7) {
-      setServo(SERVO1, false, true, true);
-      setServo(SERVO2, false, true, true);
-    }
-    motorPhase++;
-    if (motorPhase > 7) {
-      motorPhase = 0;
-    }
+    // if (motorPhase == 0) {
+    //   setServo(SERVO1, true, false, true);
+    //   setServo(SERVO2, true, false, true);
+    // }
+    // if (motorPhase == 1) {
+    //   setServo(SERVO1, true, true, true);
+    //   setServo(SERVO2, true, true, true);
+    // }
+    // if (motorPhase == 2) {
+    //   setServo(SERVO1, true, false, true);
+    //   setServo(SERVO2, true, false, true);
+    // }
+    // if (motorPhase == 3) {
+    //   setServo(SERVO1, false, true, true);
+    //   setServo(SERVO2, false, true, true);
+    // }
+    // if (motorPhase == 4) {
+    //   setServo(SERVO1, true, false, false);
+    //   setServo(SERVO2, true, false, false);
+    // }    
+    // if (motorPhase == 5) {
+    //   setServo(SERVO1, true, true, false);
+    //   setServo(SERVO2, true, true, false);
+    // }
+    // if (motorPhase == 6) {
+    //   setServo(SERVO1, true, false, false);
+    //   setServo(SERVO2, true, false, false);
+    // }
+    // if (motorPhase == 7) {
+    //   setServo(SERVO1, false, true, true);
+    //   setServo(SERVO2, false, true, true);
+    // }
+    // motorPhase++;
+    // if (motorPhase > 7) {
+    //   motorPhase = 0;
+    // }
 
     servoTimer.startTimer(SERVO_TIMER_DELAY);
   }
@@ -298,7 +317,7 @@ void loop() {
     display1.setRotation(0);
     display1.setTextSize(1);
     display1.setTextColor(WHITE);
-    display1.setCursor(0,0);
+    display1.setCursor(0,1);
     display1.printf("Dist:   %0.2f in\n", inches);
     display1.printf("Weight: %0.2f grams\n", weight);
     display1.display();
